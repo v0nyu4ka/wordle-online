@@ -8,7 +8,7 @@ export default function App() {
   const [sessionId, setSessionId] = useState('')
   const [joinId, setJoinId] = useState('')
   const [ws, setWs] = useState(null)
-  const [guesses, setGuesses] = useState([])
+  const [allGuesses, setAllGuesses] = useState([])
   const [myGuesses, setMyGuesses] = useState([])
   const [currentInput, setCurrentInput] = useState('')
   const [solved, setSolved] = useState(false)
@@ -17,6 +17,7 @@ export default function App() {
   const [players, setPlayers] = useState({})
   const [gameOver, setGameOver] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [feedOpen, setFeedOpen] = useState(false)
   const feedRef = useRef(null)
 
   const showToast = (msg, ms = 2500) => { setToast(msg); setTimeout(() => setToast(''), ms) }
@@ -33,18 +34,18 @@ export default function App() {
           break
         case 'joined':
           setSessionId(msg.data.sessionId)
-          setGuesses(msg.data.guesses || [])
+          setAllGuesses(msg.data.guesses || [])
           setPlayers(msg.data.players || {})
           setScreen('game')
           break
         case 'guess_result':
           setMyGuesses(prev => [...prev, msg.data.guess])
-          setGuesses(prev => [...prev, msg.data.guess])
+          setAllGuesses(prev => [...prev, msg.data.guess])
           if (msg.data.solved) { setSolved(true); setAnswer(msg.data.answer) }
           if (msg.data.answer && !msg.data.solved) { setGameOver(true); setAnswer(msg.data.answer) }
           break
         case 'player_guess':
-          setGuesses(prev => [...prev, msg.data])
+          setAllGuesses(prev => [...prev, msg.data])
           break
         case 'player_joined':
           showToast(`${msg.data.nickname} joined!`)
@@ -54,7 +55,7 @@ export default function App() {
           showToast(`${msg.data.nickname} left`)
           break
         case 'new_round':
-          setMyGuesses([]); setGuesses([]); setSolved(false); setAnswer(''); setGameOver(false); setCurrentInput('')
+          setMyGuesses([]); setAllGuesses([]); setSolved(false); setAnswer(''); setGameOver(false); setCurrentInput('')
           showToast('New word! Go!')
           break
         case 'error':
@@ -66,62 +67,40 @@ export default function App() {
     return socket
   }, [])
 
-  useEffect(() => {
-    const socket = connect()
-    return () => socket.close()
-  }, [])
+  useEffect(() => { const s = connect(); return () => s.close() }, [])
 
   useEffect(() => {
-    if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight
-  }, [guesses])
-
-  // Disable ctrl+c, allow only our copy button
-  useEffect(() => {
-    const handler = (e) => {
-      if (e.ctrlKey && e.key === 'c') e.preventDefault()
-    }
+    const handler = (e) => { if (e.ctrlKey && e.key === 'c') e.preventDefault() }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
   }, [])
 
-  const createSession = () => {
-    if (!ws || !nickname.trim()) return
-    ws.send(JSON.stringify({ type: 'create', nickname: nickname.trim() }))
-  }
-
-  const joinSession = () => {
-    if (!ws || !nickname.trim() || !joinId.trim()) return
-    ws.send(JSON.stringify({ type: 'join', nickname: nickname.trim(), session: joinId.trim() }))
-  }
-
+  const createSession = () => { if (ws && nickname.trim()) ws.send(JSON.stringify({ type: 'create', nickname: nickname.trim() })) }
+  const joinSession = () => { if (ws && nickname.trim() && joinId.trim()) ws.send(JSON.stringify({ type: 'join', nickname: nickname.trim(), session: joinId.trim() })) }
   const submitGuess = () => {
     if (!ws || currentInput.length !== 5 || solved || gameOver) return
     ws.send(JSON.stringify({ type: 'guess', word: currentInput.toLowerCase() }))
     setCurrentInput('')
   }
-
   const newWord = () => ws?.send(JSON.stringify({ type: 'new_word' }))
-
-  const copySessionId = () => {
-    navigator.clipboard.writeText(sessionId)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
-  }
+  const copySessionId = () => { navigator.clipboard.writeText(sessionId); setCopied(true); setTimeout(() => setCopied(false), 2000) }
 
   const handleKey = useCallback((e) => {
     if (screen !== 'game' || solved || gameOver) return
     if (e.ctrlKey) return
     if (e.key === 'Enter') { submitGuess(); return }
     if (e.key === 'Backspace') { setCurrentInput(prev => prev.slice(0, -1)); return }
-    if (/^[a-zA-Z]$/.test(e.key) && currentInput.length < 5) {
-      setCurrentInput(prev => prev + e.key.toLowerCase())
-    }
+    if (/^[a-zA-Z]$/.test(e.key) && currentInput.length < 5) setCurrentInput(prev => prev + e.key.toLowerCase())
   }, [screen, currentInput, solved, gameOver, ws])
 
-  useEffect(() => {
-    window.addEventListener('keydown', handleKey)
-    return () => window.removeEventListener('keydown', handleKey)
-  }, [handleKey])
+  useEffect(() => { window.addEventListener('keydown', handleKey); return () => window.removeEventListener('keydown', handleKey) }, [handleKey])
+
+  // Group guesses by player
+  const guessesByPlayer = {}
+  allGuesses.forEach(g => {
+    if (!guessesByPlayer[g.player]) guessesByPlayer[g.player] = []
+    guessesByPlayer[g.player].push(g)
+  })
 
   const renderGrid = (guesses, current = '') => {
     const rows = []
@@ -163,17 +142,20 @@ export default function App() {
     return status
   }
 
+  const playerCount = Object.keys(guessesByPlayer).length
+
   if (screen === 'menu') {
     return (
       <div className="app menu">
-        <h1>🟩 Wordle Online</h1>
+        <h1>🟩 Wordle</h1>
+        <p className="subtitle">Online Multiplayer</p>
         <input placeholder="Your nickname" value={nickname} onChange={e => setNickname(e.target.value)} maxLength={15}
           onKeyDown={e => e.key === 'Enter' && nickname.trim() && !joinId.trim() && createSession()} />
         <button onClick={createSession} disabled={!nickname.trim()}>Create Game</button>
-        <div className="divider">or join existing</div>
-        <input placeholder="Session code" value={joinId} onChange={e => setJoinId(e.target.value)} maxLength={6}
+        <div className="divider">or join</div>
+        <input placeholder="Room code" value={joinId} onChange={e => setJoinId(e.target.value)} maxLength={6}
           onKeyDown={e => e.key === 'Enter' && joinSession()} />
-        <button onClick={joinSession} disabled={!nickname.trim() || !joinId.trim()}>Join Game</button>
+        <button className="btn-secondary" onClick={joinSession} disabled={!nickname.trim() || !joinId.trim()}>Join Game</button>
       </div>
     )
   }
@@ -182,32 +164,42 @@ export default function App() {
     <div className="app game">
       {toast && <div className="toast">{toast}</div>}
 
-      <div className="feed" ref={feedRef}>
-        <h3>Live Feed</h3>
-        <div className="session-code">
-          Room: <strong>{sessionId}</strong>
-          <button className="copy-btn" onClick={copySessionId}>{copied ? '✅' : '📋'}</button>
+      {/* Mobile feed toggle */}
+      <button className="feed-toggle" onClick={() => setFeedOpen(!feedOpen)}>
+        👥 {playerCount} {feedOpen ? '✕' : ''}
+      </button>
+
+      <div className={`feed ${feedOpen ? 'feed-open' : ''}`} ref={feedRef}>
+        <div className="feed-header">
+          <h3>Players</h3>
+          <div className="session-code">
+            <span>{sessionId}</span>
+            <button className="copy-btn" onClick={copySessionId}>{copied ? '✅' : '📋'}</button>
+          </div>
         </div>
-        {guesses.map((g, i) => (
-          <div key={i} className="feed-item">
-            <span className="feed-player">{g.player}</span>
-            <div className="feed-letters">
-              {g.results.map((r, j) => (
-                <span key={j} className={`feed-cell ${r.status}`}/>
+
+        {Object.entries(guessesByPlayer).map(([player, pGuesses]) => (
+          <div key={player} className="player-section">
+            <div className="player-name">{player} {player === nickname ? '(you)' : ''}</div>
+            <div className="player-guesses">
+              {pGuesses.map((g, i) => (
+                <div key={i} className="feed-row">
+                  {g.results.map((r, j) => (
+                    <span key={j} className={`feed-cell ${r.status}`} />
+                  ))}
+                </div>
               ))}
+              {pGuesses.length === 0 && <div className="feed-empty-player">...</div>}
             </div>
           </div>
         ))}
-        {guesses.length === 0 && <div className="feed-empty">No guesses yet...</div>}
+
+        {playerCount === 0 && <div className="feed-empty">Waiting for guesses...</div>}
       </div>
 
       <div className="main">
-        <div className="header">
-          <h2>Wordle</h2>
-        </div>
-
-        {solved && <div className="success">🎉 You got it! The word was <strong>{answer}</strong></div>}
-        {gameOver && !solved && <div className="failure">💀 The word was <strong>{answer}</strong></div>}
+        {solved && <div className="result success">🎉 <strong>{answer.toUpperCase()}</strong></div>}
+        {gameOver && !solved && <div className="result failure">💀 <strong>{answer.toUpperCase()}</strong></div>}
 
         {renderGrid(myGuesses, currentInput)}
 
@@ -220,17 +212,13 @@ export default function App() {
                     if (key === 'Enter') submitGuess()
                     else if (key === '⌫') setCurrentInput(prev => prev.slice(0, -1))
                     else if (currentInput.length < 5) setCurrentInput(prev => prev + key)
-                  }}>
-                  {key}
-                </button>
+                  }}>{key}</button>
               ))}
             </div>
           ))}
         </div>
 
-        {(solved || gameOver) && (
-          <button className="new-word-btn" onClick={newWord}>🔄 New Word</button>
-        )}
+        {(solved || gameOver) && <button className="new-word-btn" onClick={newWord}>🔄 New Word</button>}
       </div>
     </div>
   )
