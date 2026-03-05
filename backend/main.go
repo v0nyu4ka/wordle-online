@@ -19,7 +19,7 @@ type LetterResult struct {
 
 type Guess struct {
 	Player  string         `json:"player"`
-	Word    string         `json:"word"`
+	Word    string         `json:"word,omitempty"`
 	Results []LetterResult `json:"results"`
 	Time    int64          `json:"time"`
 }
